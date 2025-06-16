@@ -2,9 +2,10 @@
 
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder, LabelEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+import joblib
 
 # Load the dataset
 def load_data(file_path):
@@ -36,6 +37,10 @@ def clean_data(df):
     for col in categorical_cols:
         df[col] = df[col].str.strip()
 
+    # Fill missing values in TotalCharges with the mean (again, in case of new NaNs after cleaning)
+    if 'TotalCharges' in df.columns:
+        df.update(df[['TotalCharges']].fillna(df['TotalCharges'].mean()))
+
     # Handle duplicate rows
     df.drop_duplicates(inplace=True)
 
@@ -46,31 +51,49 @@ def clean_data(df):
 # encode categorical features (like "Yes/No", "Month-to-month") into numbers
 
 def encode_features(df):
-    # Step 1: Label encode binary categorical columns
-    binary_cols = ['Churn', 'Partner', 'Dependents']
-    for col in binary_cols:
-        df[col] = df[col].map({'Yes': 1, 'No': 0})
+    # Target column encoding (Yes/No → 1/0)
+    if 'Churn' in df.columns:
+        df['Churn'] = df['Churn'].map({'Yes': 1, 'No': 0}).astype(int)
 
-    # Step 2: One-hot encode multi-category columns
-    multi_category_cols = ['InternetService', 'Contract', 'PaymentMethod', 'SeniorCitizen']
-    df = pd.get_dummies(df, columns=multi_category_cols, drop_first=True)
+    # Label encode other object columns
+    label_enc = LabelEncoder()
+    for col in df.select_dtypes(include=['object']).columns:
+        if col != 'Churn':
+            df[col] = label_enc.fit_transform(df[col])
 
     return df
 
 # Scale numerical features
-def scale_features(df):
-    # Identify numerical columns
-    numerical_cols = df.select_dtypes(include=['int64', 'float64']).columns
+def scale_features(df, target_column='Churn'):
+    """
+    Scales numeric feature columns in the DataFrame except the target column.
 
-    # Initialize the scaler
+    Parameters:
+    - df: pandas DataFrame
+    - target_column: str, name of the target column to exclude from scaling
+
+    Returns:
+    - df: DataFrame with scaled numeric features (excluding target)
+    """
+    # Identify numeric columns
+    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns
+
+    # Exclude the target column from scaling
+    if target_column in numeric_cols:
+        numeric_cols = numeric_cols.drop(target_column)
+
+    # Scale features
     scaler = StandardScaler()
+    df[numeric_cols] = scaler.fit_transform(df[numeric_cols])
 
-    # Scale the numerical features
-    df[numerical_cols] = scaler.fit_transform(df[numerical_cols])
+    joblib.dump(scaler, "models/scaler.joblib")
 
     return df
 
 # Split the dataset into training and testing sets
+
+from imblearn.over_sampling import SMOTE
+from sklearn.model_selection import train_test_split
 
 # Separate features and target variable
 def split_data(df, target_col='Churn'):
@@ -80,8 +103,14 @@ def split_data(df, target_col='Churn'):
     # Split the dataset into training and testing sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
+    # Apply SMOTE to handle class imbalance in the training set
+    smote = SMOTE(random_state=42)
+    X_train, y_train = smote.fit_resample(X_train, y_train)
+
     return X_train, X_test, y_train, y_test
 
+
+    
 
 # Test the preprocessing pipeline
 if __name__ == "__main__":
